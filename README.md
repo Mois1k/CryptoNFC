@@ -1,10 +1,10 @@
 # nfc-in-rust
 
 A bare-metal PN532 NFC driver over I2C, written in `no_std` Rust with **no HAL crate** and
-**no `cortex-m-rt`** — just a hand-written runtime (linker script, vector table, reset
+**no `cortex-m-rt`** - just a hand-written runtime (linker script, vector table, reset
 handler) and, eventually, the vendor PAC (`mcx-pac`) for typed register access.
 
-**Target hardware:** NXP FRDM-MCXN236 — Cortex-M33, ARMv8-M Mainline with FPU,
+**Target hardware:** NXP FRDM-MCXN236 - Cortex-M33, ARMv8-M Mainline with FPU,
 `thumbv8m.main-none-eabihf`.
 
 > **Status: early work in progress.** This is not a working driver. Right now the project
@@ -28,7 +28,7 @@ Concretely that means:
   the entry into Rust are all hand-written. Re-deriving ARMv8-M startup by hand is part of
   the point.
 - **PAC only, and only later.** `mcx-pac` is a mechanical, SVD-generated mapping of the
-  reference manual into typed Rust — it adds no behaviour and is verifiable line-by-line
+  reference manual into typed Rust - it adds no behaviour and is verifiable line-by-line
   against the datasheet, so it is acceptable as the one dependency. It is *not wired in
   yet* (`Cargo.toml` currently has an empty `[dependencies]`); early register pokes are
   raw pointer writes.
@@ -42,11 +42,11 @@ The dissertation write-up is the deliverable; this repo is the artefact that bac
 ### Done
 
 - [x] Toolchain / target set up: `thumbv8m.main-none-eabihf`, edition 2024, pinned via
-      `.cargo/config.toml` (no `rust-toolchain.toml` yet — built with stable `rustc 1.93`).
+      `.cargo/config.toml` (no `rust-toolchain.toml` yet - built with stable `rustc 1.93`).
 - [x] `no_std` + `no_main` binary skeleton with a minimal `panic_handler` (spin loop).
-- [x] `memory.x` — device memory regions: `FLASH` @ `0x0000_0000` (1 MiB),
+- [x] `memory.x` - device memory regions: `FLASH` @ `0x0000_0000` (1 MiB),
       `RAM` @ `0x2000_0000` (256 KiB).
-- [x] `link.x` — hand-written linker script:
+- [x] `link.x` - hand-written linker script:
   - `ENTRY(Reset)`
   - `.vector_table` forced to the start of `FLASH` with `KEEP`
   - `.text`, `.rodata` in `FLASH`
@@ -55,7 +55,7 @@ The dissertation write-up is the deliverable; this repo is the artefact that bac
   - exported symbols: `_estack`, `_sidata` (`LOADADDR(.data)`)
 - [x] Vector table as a `#[repr(C)]` struct in `.vector_table`, `#[used]`:
       initial SP from `&_estack`, reset vector pointing at `Reset`. Only **two entries** so far.
-- [x] `Reset` symbol: `extern "C"`, `#[no_mangle]`. Currently an infinite loop — **no init**.
+- [x] `Reset` symbol: `extern "C"`, `#[no_mangle]`. Currently an infinite loop - **no init**.
 - [x] Verified with `rust-objdump`:
   - `.vector_table` contains SP = `0x2004_0000` and reset vector = `0x0000_0019`
     (address `0x18` with the Thumb bit set)
@@ -64,12 +64,12 @@ The dissertation write-up is the deliverable; this repo is the artefact that bac
 ### Not done yet
 
 - [ ] Reset handler does **not** copy `.data` from its LMA or zero `.bss`, and does not
-      call a `main` — Rust code that assumes initialised statics is currently unsafe to run.
+      call a `main` - Rust code that assumes initialised statics is currently unsafe to run.
 - [ ] No FPU enable (`CPACR`) despite the hard-float target; no `VTOR` set.
 - [ ] Vector table has no core exception / fault handlers (NMI, HardFault, MemManage,
       BusFault, UsageFault, SVC, PendSV, SysTick) and no device IRQ slots.
 - [ ] `mcx-pac` not added.
-- [ ] No clock / PLL configuration — would run on the default reset clock (FRO).
+- [ ] No clock / PLL configuration - would run on the default reset clock (FRO).
 - [ ] No GPIO, no SysTick, no delay/timebase.
 - [ ] No I2C (LPI2C) bring-up.
 - [ ] No PN532 framing or driver layer.
@@ -77,7 +77,7 @@ The dissertation write-up is the deliverable; this repo is the artefact that bac
       probe-rs / LinkServer / pyOCD setup). Not yet run on hardware.
 - [ ] No tests, no CI.
 - [ ] Linker script does not yet discard/place `.ARM.exidx` / `.ARM.attributes` or add a
-      stack-overflow guard; the full MCX N236 SRAM map (multiple banks) is not reflected —
+      stack-overflow guard; the full MCX N236 SRAM map (multiple banks) is not reflected -
       `memory.x` uses a single conservative 256 KiB region.
 
 ---
@@ -136,9 +136,9 @@ the odd (Thumb) address of `Reset`.
 `cortex-m-rt` provides exactly the pieces this project is meant to build by hand: the
 vector table, the reset handler, `.data`/`.bss` init, FPU/`VTOR` setup, the `#[entry]` and
 `#[exception]` macros, and a set of linker sections/symbols its `link.x` expects. Using it
-would mean the most instructive part of embedded bring-up — what the CPU does between
+would mean the most instructive part of embedded bring-up - what the CPU does between
 reset and the first line of `main`, and what has to be true about memory before Rust is
-sound — happens inside a dependency.
+sound - happens inside a dependency.
 
 The hand-written version here owns:
 
@@ -157,7 +157,7 @@ makes the write-up concrete.
 ### Why the PAC is acceptable (once added)
 
 `mcx-pac` is generated from NXP's SVD. It is a typed name for each register and field and
-nothing more — no sequencing, no policy, no hidden state. It can be checked against the
+nothing more - no sequencing, no policy, no hidden state. It can be checked against the
 datasheet mechanically, and it removes a class of transcription bugs (wrong offset, wrong
 bit) without removing any of the understanding. It is the single dependency the project
 will allow.
