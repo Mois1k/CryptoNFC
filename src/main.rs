@@ -27,6 +27,8 @@ unsafe extern "C" {
 struct VectorTable {
     stack_pointer: *const u32,
     reset: unsafe extern "C" fn() -> !,
+    nmi: unsafe extern "C" fn() -> !,
+    hard_fault: unsafe extern "C" fn() -> !,
 }
 
 unsafe impl Sync for VectorTable {}
@@ -36,6 +38,8 @@ unsafe impl Sync for VectorTable {}
 static VECTOR: VectorTable = VectorTable {
     stack_pointer: unsafe { &_estack as *const u32 },
     reset: Reset,
+    nmi: DefaultHandler,
+    hard_fault: DefaultHandler,
 };
 
 #[used]
@@ -82,5 +86,10 @@ pub extern "C" fn Reset() -> ! {
 }
 
 fn main() -> ! {
-    loop{}
+    loop {}
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn DefaultHandler() -> ! {
+    loop {}
 }
