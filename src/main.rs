@@ -8,6 +8,7 @@ use core::{
 };
 
 const CPACR_ADDR: usize = 0xE000ED88;
+const VTOR_ADDR: usize = 0xE000ED08;
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo<'_>) -> ! {
@@ -29,6 +30,16 @@ struct VectorTable {
     reset: unsafe extern "C" fn() -> !,
     nmi: unsafe extern "C" fn() -> !,
     hard_fault: unsafe extern "C" fn() -> !,
+    mem_manage: unsafe extern "C" fn() -> !,
+    bus_fault: unsafe extern "C" fn() -> !,
+    usage_fault: unsafe extern "C" fn() -> !,
+    secure_fault: unsafe extern "C" fn() -> !,
+    reserved1: [u32; 3],
+    sv_call: unsafe extern "C" fn() -> !,
+    debug_monitor: unsafe extern "C" fn() -> !,
+    reserved2: [u32; 1],
+    pend_sv: unsafe extern "C" fn() -> !,
+    sys_tick: unsafe extern "C" fn() -> !,
 }
 
 unsafe impl Sync for VectorTable {}
@@ -40,6 +51,16 @@ static VECTOR: VectorTable = VectorTable {
     reset: Reset,
     nmi: DefaultHandler,
     hard_fault: DefaultHandler,
+    mem_manage: DefaultHandler,
+    bus_fault: DefaultHandler,
+    usage_fault: DefaultHandler,
+    secure_fault: DefaultHandler,
+    reserved1: [0; 3],
+    sv_call: DefaultHandler,
+    debug_monitor: DefaultHandler,
+    reserved2: [0; 1],
+    pend_sv: DefaultHandler,
+    sys_tick: DefaultHandler,
 };
 
 #[used]
@@ -50,18 +71,25 @@ static mut BSS_ZERO_TEST: u32 = 0;
 #[unsafe(no_mangle)]
 pub extern "C" fn Reset() -> ! {
     let cpacr = CPACR_ADDR as *mut u32;
+    let vtor = VTOR_ADDR as *mut u32;
     let mask: u32 = 0x00f0_0000;
     let value = unsafe { read_volatile(cpacr) };
     let result = value | mask;
 
-    unsafe { write_volatile(cpacr, result) };
     unsafe {
+        write_volatile(cpacr, result);
         asm!("dsb");
         asm!("isb");
     }
 
-    let mut sursa_data = unsafe { &_sidata as *const u32 }; // FLASH ADDRESS SOURCE
-    let mut destinatie_data = unsafe { &_sdata as *const u32 as *mut u32 }; // 
+    unsafe {
+        write_volatile(vtor, &VECTOR as *const VectorTable as u32);
+        asm!("dsb");
+        asm!("isb");
+    }
+
+    let mut sursa_data = unsafe { &_sidata as *const u32 };
+    let mut destinatie_data = unsafe { &_sdata as *const u32 as *mut u32 };
     let sfarsit_data = unsafe { &_edata as *const u32 as *mut u32 };
 
     unsafe {
