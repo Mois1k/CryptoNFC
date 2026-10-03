@@ -7,8 +7,9 @@ use core::{
     ptr::{read_volatile, write_volatile},
 };
 
-const CPACR_ADDR: usize = 0xE000ED88;
-const VTOR_ADDR: usize = 0xE000ED08;
+const CPACR_ADDR: usize = 0xE000_ED88;
+const VTOR_ADDR: usize = 0xE000_ED08;
+const SYSCON_AHBCLKCTRL0: usize = 0x4000_0200;
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo<'_>) -> ! {
@@ -114,7 +115,31 @@ pub extern "C" fn Reset() -> ! {
 }
 
 fn main() -> ! {
-    loop {}
+    let ahbclkctrl0 = SYSCON_AHBCLKCTRL0 as *mut u32;
+    let ahbclkctrl0_value = unsafe { read_volatile(ahbclkctrl0) };
+    let ahbclkctrl0_result = ahbclkctrl0_value | (1 << 17) | (1 << 23);
+    unsafe { write_volatile(ahbclkctrl0, ahbclkctrl0_result) };
+
+    const GPIO4_PDDR: usize = 0x4009_E054;
+    const GPIO4_PDOR: usize = 0x4009_E040;
+    const GPIO4_PTOR: usize = 0x4009_E04C;
+
+    let pddr = GPIO4_PDDR as *mut u32;
+    let pddr_value = unsafe { read_volatile(pddr) };
+    let pddr_res = pddr_value | (1 << 18);
+    let pdor = GPIO4_PDOR as *mut u32;
+    let pdor_value = unsafe { read_volatile(pdor) };
+    let pdor_res = pdor_value | (1 << 18);
+    let ptor = GPIO4_PTOR as *mut u32;
+    unsafe { write_volatile(pdor, pdor_res) };
+    unsafe { write_volatile(pddr, pddr_res) };
+
+    loop {
+        unsafe { write_volatile(ptor, 1 << 18) };
+        for _ in 0..12000000 {
+            unsafe { asm!("nop") };
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
