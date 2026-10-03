@@ -1,20 +1,50 @@
 # nfc-in-rust
 
-A bare-metal driver for the PN532 NFC chip over I2C, written in `no_std` Rust for the NXP
+An NFC-unlocked encryption box for USB sticks, written in bare-metal `no_std` Rust for the NXP
 FRDM-MCXN236 board (Cortex-M33, target `thumbv8m.main-none-eabihf`).
 
-There is no HAL and no `cortex-m-rt` in this project. The linker script, vector table and
-reset handler are written by hand, and peripherals are driven by writing their registers
-directly, following the reference manual.
+You plug a USB stick into the board and tap an NFC tag. If the stick holds normal data, the
+board encrypts it. If the stick was already encrypted by the board, it decrypts it. Without the
+right tag, the data on the stick stays unreadable.
 
-This is still early work. The board boots into my own runtime and blinks the red LED once per
-second, using GPIO and SysTick configured straight from the registers. The I2C and PN532 parts
-haven't been started yet.
+There is no HAL and no `cortex-m-rt` in this project. The linker script, vector table and
+reset handler are written by hand, and every peripheral (GPIO, timers, I2C, USB, flash) is
+driven by writing its registers directly, following the reference manual.
+
+This is still early work. Right now the board boots into my own runtime and blinks an LED
+using GPIO and SysTick configured from the registers. The NFC, USB and crypto parts haven't
+been started yet.
+
+## How it should work
+
+The hardware:
+
+- the FRDM-MCXN236 board
+- a PN532 NFC module, connected over I2C
+- a USB port on the board working as a USB host, where the stick goes in
+- an RGB LED that shows what the board is doing
+
+The flow:
+
+| What happens                             | LED    | What the board does                          |
+|------------------------------------------|--------|----------------------------------------------|
+| nothing plugged in                       | off    | waits for a stick                            |
+| a USB stick is plugged in                | yellow | reads the stick and checks if it's encrypted |
+| an NFC tag is brought close to the board | red    | encrypts or decrypts the whole stick         |
+
+The board decides what to do by itself:
+
+- If the stick isn't marked as encrypted, it encrypts it with the key linked to that NFC tag
+  and marks it as encrypted.
+- If the stick is already marked as encrypted, it picks the matching key and decrypts it.
+
+The keys are stored in the board's internal flash, in a small list. The NFC tag and the flag
+saved for each stick tell the board which key from the list to use.
 
 ## Why
 
-This is my dissertation project. I want to understand every step between power-on and reading
-an NFC tag, so I'm avoiding crates that hide what the hardware is doing:
+This is my dissertation project. I want to understand every step between power-on and an
+encrypted USB stick, so I'm avoiding crates that hide what the hardware is doing:
 
 - No HAL. I write the peripheral registers myself, with the reference manual open.
 - No `cortex-m-rt`. Writing the startup code myself (vector table, `.data`/`.bss` init, the
@@ -44,20 +74,6 @@ an NFC tag, so I'm avoiding crates that hide what the hardware is doing:
   `COUNTFLAG`.
 - Everything above was tested on the board with `probe-rs`. I also checked the core clock
   two ways (a calibrated `nop` loop and SysTick) and both came out at 48 MHz.
-
-## Still to do
-
-- Add `mcx-pac` and replace the raw addresses.
-- Configure the clocks. Right now the chip runs on whatever the boot ROM leaves (48 MHz).
-- Device interrupts. SysTick is polled for now.
-- GPIO inputs (the SW2/SW3 buttons) and proper pin functions instead of plain addresses.
-- I2C (LPI2C).
-- The PN532 frame format and commands.
-- A `runner` in `.cargo/config.toml` so `cargo run` flashes the board.
-- Tests and CI.
-- In the linker script: handle `.ARM.exidx`/`.ARM.attributes`, add a stack overflow guard,
-  and maybe use RAMX (96 KiB at `0x0400_0000`).
-- Remove the two test statics (`DATA_CONTOR_TEST`, `BSS_ZERO_TEST`) once there are real ones.
 
 ## Building
 
@@ -121,13 +137,74 @@ probe-rs write --chip MCXN236VDF b32 0x4009E04C 0x00040000
 | `Cargo.toml`         | crate metadata, no dependencies yet                          |
 | `memory.x`           | flash and RAM regions                                        |
 | `link.x`             | linker script                                                |
-| `src/main.rs`        | panic handler and `main` (the LED blink)                     |
+| `src/main.rs`        | panic handler and `main` (the LED blink for now)             |
 | `src/startup.rs`     | linker symbols, vector table, `Reset`, `DefaultHandler`      |
 | `src/reg.rs`         | `read_reg`, `write_reg`, `set_bits`                          |
 | `src/scb.rs`         | ARM System Control Block registers (`CPACR`, `VTOR`)         |
 | `src/systick.rs`     | ARM SysTick: `init` and `delay_ms`                            |
 | `src/syscon.rs`      | NXP SYSCON registers (clock gating)                          |
 | `src/gpio.rs`        | NXP GPIO4 registers (`PDOR`, `PTOR`, `PDDR`)                 |
+
+## Roadmap
+
+The basics, done:
+
+1. ~~Startup code~~ (`.data`, `.bss`, FPU, `VTOR`, `main`)
+2. ~~Vector table~~ for the core exceptions
+3. ~~GPIO and blinky~~ (red LED on P4_18)
+4. ~~SysTick delay~~
+
+Board foundations:
+
+5. Add `mcx-pac`.
+6. Clocks: understand FRO/PLL/SCG on the MCX N and set known frequencies for the core, I2C
+   and USB.
+7. Interrupts: device IRQ slots in the vector table and an interrupt-driven SysTick tick.
+8. The RGB LED with all three colours (yellow is red and green together).
+
+NFC:
+
+9. I2C master from registers: pin muxing, baud rate, START/STOP, TX/RX FIFOs, NACK and
+   arbitration loss.
+10. PN532 transport: wakeup over I2C, polling the status byte, building and parsing frames
+    (preamble, `00 FF` start code, `LEN`/`LCS`, `TFI` `0xD4`/`0xD5`, payload, `DCS`,
+    postamble), ACK/NACK and error frames.
+11. PN532 commands: `GetFirmwareVersion`, `SAMConfiguration`, `InListPassiveTarget`
+    (ISO/IEC 14443 Type A), and reading a tag UID.
+
+USB stick:
+
+12. USB host controller: detect when a device is plugged in or removed, reset the port,
+    control transfers.
+13. Enumeration: read the device descriptor, set an address, pick the configuration.
+14. Mass Storage Class (Bulk-Only Transport) with the SCSI commands needed to read and write
+    blocks (`INQUIRY`, `READ CAPACITY`, `READ(10)`, `WRITE(10)`).
+
+Keys and encryption:
+
+15. Internal flash driver, to keep the key list and the per-stick flags across power cycles.
+16. AES, checked against the official NIST test vectors. I still have to see if the MCXN236
+    has a hardware AES block I can use, or if it has to be done in software.
+17. Encrypting and decrypting a whole stick block by block, and marking it as encrypted.
+
+Putting it together:
+
+18. The full flow: stick in, yellow LED, tag tapped, red LED, encrypt or decrypt, done.
+
+## Open questions
+
+Things I still need to decide before the encryption part:
+
+- Where the "encrypted" flag lives. Keeping it only on the board means another board can't
+  tell that the stick is encrypted. Writing a small header on the stick itself would fix
+  that, and the board could keep the key list.
+- How a stick is recognised. The USB serial number is the obvious choice, but not every
+  stick has a unique one.
+- What happens if the stick is pulled out or the power drops halfway through. The stick would
+  end up half encrypted, so the board needs to remember how far it got.
+- How the keys in flash are protected, so someone with a debugger can't just read them out.
+- Block level or file level encryption. Encrypting raw blocks is simpler and doesn't need a
+  FAT driver, but the stick then can't be read by a computer until it's decrypted again.
 
 ## Notes on the design
 
@@ -154,22 +231,6 @@ offset, wrong bit) without hiding how anything works.
 
 There's more boilerplate, and it's easy to get small things wrong: section alignment, `Sync`
 impls, `#[used]`, volatile accesses, memory barriers. The code also only works on this one
-board. That's fine for a dissertation, but I wouldn't do it this way in a real driver crate.
-
-## Roadmap
-
-1. ~~Finish the startup code~~ (`.data`, `.bss`, FPU, `VTOR`, `main`)
-2. ~~Full vector table~~ for the core exceptions. Device IRQs come later.
-3. Add `mcx-pac`.
-4. Clocks: understand FRO/PLL/SCG on the MCX N, set a known core frequency and a clock for I2C.
-5. ~~GPIO and blinky~~ (red LED on P4_18)
-6. ~~SysTick delay~~. An interrupt-driven tick comes later.
-7. I2C master from registers: pin muxing, baud rate, START/STOP, TX/RX FIFOs, NACK and
-   arbitration loss.
-8. PN532 transport: wakeup over I2C, polling the status byte, building and parsing frames
-   (preamble, `00 FF` start code, `LEN`/`LCS`, `TFI` `0xD4`/`0xD5`, payload, `DCS`,
-   postamble), ACK/NACK and error frames.
-9. PN532 commands: `GetFirmwareVersion`, `SAMConfiguration`, `InListPassiveTarget`
-   (ISO/IEC 14443 Type A), and reading a card UID from start to finish.
-10. If there's time: use the PN532 IRQ line instead of polling, MIFARE Classic
-    authentication, NDEF parsing.
+board. That's fine for a dissertation, but I wouldn't build a real product this way. Writing
+my own AES is also something you shouldn't do in production. Here it's for learning, and it
+gets checked against the standard test vectors.
