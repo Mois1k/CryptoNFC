@@ -1,4 +1,4 @@
-# nfc-in-rust
+# CryptoNFC
 
 An NFC-unlocked encryption box for USB sticks, written in bare-metal `no_std` Rust for the NXP
 FRDM-MCXN236 board (Cortex-M33, target `thumbv8m.main-none-eabihf`).
@@ -128,22 +128,6 @@ probe-rs read  --chip MCXN236VDF b32 0x20000000 2
 # toggle the red LED by hand
 probe-rs write --chip MCXN236VDF b32 0x4009E04C 0x00040000
 ```
-
-## Files
-
-| Path                 | Contents                                                     |
-|----------------------|--------------------------------------------------------------|
-| `.cargo/config.toml` | default target and linker flags                              |
-| `Cargo.toml`         | crate metadata, no dependencies yet                          |
-| `memory.x`           | flash and RAM regions                                        |
-| `link.x`             | linker script                                                |
-| `src/main.rs`        | panic handler and `main` (the LED blink for now)             |
-| `src/startup.rs`     | linker symbols, vector table, `Reset`, `DefaultHandler`      |
-| `src/reg.rs`         | `read_reg`, `write_reg`, `set_bits`                          |
-| `src/scb.rs`         | ARM System Control Block registers (`CPACR`, `VTOR`)         |
-| `src/systick.rs`     | ARM SysTick: `init` and `delay_ms`                            |
-| `src/syscon.rs`      | NXP SYSCON registers (clock gating)                          |
-| `src/gpio.rs`        | NXP GPIO4 registers (`PDOR`, `PTOR`, `PDDR`)                 |
 
 ## Roadmap
 
