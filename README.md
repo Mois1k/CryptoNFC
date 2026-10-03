@@ -1,196 +1,175 @@
 # nfc-in-rust
 
-A bare-metal PN532 NFC driver over I2C, written in `no_std` Rust with **no HAL crate** and
-**no `cortex-m-rt`** - just a hand-written runtime (linker script, vector table, reset
-handler) and, eventually, the vendor PAC (`mcx-pac`) for typed register access.
+A bare-metal driver for the PN532 NFC chip over I2C, written in `no_std` Rust for the NXP
+FRDM-MCXN236 board (Cortex-M33, target `thumbv8m.main-none-eabihf`).
 
-**Target hardware:** NXP FRDM-MCXN236 - Cortex-M33, ARMv8-M Mainline with FPU,
-`thumbv8m.main-none-eabihf`.
+There is no HAL and no `cortex-m-rt` in this project. The linker script, vector table and
+reset handler are written by hand, and peripherals are driven by writing their registers
+directly, following the reference manual.
 
-> **Status: early work in progress.** This is not a working driver. Right now the project
-> builds an ELF whose vector table points at a reset handler that spins in an infinite loop.
-> It does not blink an LED, configure a clock, or touch an I2C bus yet. See
-> [Current status](#current-status).
+This is still early work. The board boots into my own runtime and blinks the red LED once per
+second, using GPIO and SysTick configured straight from the registers. The I2C and PN532 parts
+haven't been started yet.
 
----
+## Why
 
-## Purpose & motivation
+This is my dissertation project. I want to understand every step between power-on and reading
+an NFC tag, so I'm avoiding crates that hide what the hardware is doing:
 
-This is a dissertation project. The goal is **zero black boxes**: implement and understand
-every layer between power-on and a working NFC read, without leaning on abstraction crates
-that hide what the hardware is actually doing.
+- No HAL. I write the peripheral registers myself, with the reference manual open.
+- No `cortex-m-rt`. Writing the startup code myself (vector table, `.data`/`.bss` init, the
+  jump into `main`) is part of what I want to learn.
+- The only dependency I plan to allow is `mcx-pac`, a register map generated from NXP's SVD
+  file. It only gives names to registers and fields, without adding any behaviour, and it can
+  be checked against the datasheet. It isn't added yet, so for now registers are accessed
+  through raw addresses.
 
-Concretely that means:
+## What works so far
 
-- **No HAL** (`embedded-hal` impls, `mcxn-hal`, etc.). Peripherals are driven by writing
-  their registers directly, against the reference manual.
-- **No `cortex-m-rt`.** The vector table, reset handler, `.data`/`.bss` initialisation and
-  the entry into Rust are all hand-written. Re-deriving ARMv8-M startup by hand is part of
-  the point.
-- **PAC only, and only later.** `mcx-pac` is a mechanical, SVD-generated mapping of the
-  reference manual into typed Rust - it adds no behaviour and is verifiable line-by-line
-  against the datasheet, so it is acceptable as the one dependency. It is *not wired in
-  yet* (`Cargo.toml` currently has an empty `[dependencies]`); early register pokes are
-  raw pointer writes.
+- Toolchain set up for `thumbv8m.main-none-eabihf` (edition 2024, stable `rustc 1.93`).
+- `memory.x` with 1 MiB of flash at `0x0000_0000` and 224 KiB of RAM at `0x2000_0000`.
+- A linker script (`link.x`) that puts the vector table at the start of flash, places
+  `.text`, `.rodata`, `.data` and `.bss`, and exports the symbols the startup code needs.
+- The full Cortex-M33 vector table (16 entries). All core exceptions point to a
+  `DefaultHandler` that just loops, so a fault stops the program in a known place.
+- A reset handler that enables the FPU (`CPACR`), sets `VTOR`, copies `.data` from flash,
+  zeroes `.bss` and then calls `main`.
+- Small register helpers in `reg.rs` (`read_reg`, `write_reg`, `set_bits`). In release builds
+  they get inlined, and the disassembly is the same as the raw pointer code they replaced.
+- One module per peripheral, with the ARM core registers kept apart from the NXP ones.
+- The PORT4 and GPIO4 clocks enabled through `SYSCON.AHBCLKCTRL0`.
+- The red LED on P4_18 (active low) as an output. `PDOR` is written before `PDDR` so the LED
+  doesn't flash on for a moment at startup, and `PTOR` toggles it.
+- SysTick with a 1 ms reload value (`47_999` at 48 MHz) and a blocking `delay_ms` that polls
+  `COUNTFLAG`.
+- Everything above was tested on the board with `probe-rs`. I also checked the core clock
+  two ways (a calibrated `nop` loop and SysTick) and both came out at 48 MHz.
 
-The dissertation write-up is the deliverable; this repo is the artefact that backs it.
+## Still to do
 
----
-
-## Current status
-
-### Done
-
-- [x] Toolchain / target set up: `thumbv8m.main-none-eabihf`, edition 2024, pinned via
-      `.cargo/config.toml` (no `rust-toolchain.toml` yet - built with stable `rustc 1.93`).
-- [x] `no_std` + `no_main` binary skeleton with a minimal `panic_handler` (spin loop).
-- [x] `memory.x` - device memory regions: `FLASH` @ `0x0000_0000` (1 MiB),
-      `RAM` @ `0x2000_0000` (256 KiB).
-- [x] `link.x` - hand-written linker script:
-  - `ENTRY(Reset)`
-  - `.vector_table` forced to the start of `FLASH` with `KEEP`
-  - `.text`, `.rodata` in `FLASH`
-  - `.data` with VMA in `RAM`, LMA in `FLASH` (`AT>`), bracketed by `_sdata` / `_edata`
-  - `.bss` in `RAM`, bracketed by `_sbss` / `_ebss`
-  - exported symbols: `_estack`, `_sidata` (`LOADADDR(.data)`)
-- [x] Vector table as a `#[repr(C)]` struct in `.vector_table`, `#[used]`:
-      initial SP from `&_estack`, reset vector pointing at `Reset`. Only **two entries** so far.
-- [x] `Reset` symbol: `extern "C"`, `#[no_mangle]`. Currently an infinite loop - **no init**.
-- [x] Verified with `rust-objdump`:
-  - `.vector_table` contains SP = `0x2004_0000` and reset vector = `0x0000_0019`
-    (address `0x18` with the Thumb bit set)
-  - `Reset` disassembles into `.text` and the linker places sections as intended
-
-### Not done yet
-
-- [ ] Reset handler does **not** copy `.data` from its LMA or zero `.bss`, and does not
-      call a `main` - Rust code that assumes initialised statics is currently unsafe to run.
-- [ ] No FPU enable (`CPACR`) despite the hard-float target; no `VTOR` set.
-- [ ] Vector table has no core exception / fault handlers (NMI, HardFault, MemManage,
-      BusFault, UsageFault, SVC, PendSV, SysTick) and no device IRQ slots.
-- [ ] `mcx-pac` not added.
-- [ ] No clock / PLL configuration - would run on the default reset clock (FRO).
-- [ ] No GPIO, no SysTick, no delay/timebase.
-- [ ] No I2C (LPI2C) bring-up.
-- [ ] No PN532 framing or driver layer.
-- [ ] No flashing / debug configuration (no `runner` in `.cargo/config.toml`, no
-      probe-rs / LinkServer / pyOCD setup). Not yet run on hardware.
-- [ ] No tests, no CI.
-- [ ] Linker script does not yet discard/place `.ARM.exidx` / `.ARM.attributes` or add a
-      stack-overflow guard; the full MCX N236 SRAM map (multiple banks) is not reflected -
-      `memory.x` uses a single conservative 256 KiB region.
-
----
+- Add `mcx-pac` and replace the raw addresses.
+- Configure the clocks. Right now the chip runs on whatever the boot ROM leaves (48 MHz).
+- Device interrupts. SysTick is polled for now.
+- GPIO inputs (the SW2/SW3 buttons) and proper pin functions instead of plain addresses.
+- I2C (LPI2C).
+- The PN532 frame format and commands.
+- A `runner` in `.cargo/config.toml` so `cargo run` flashes the board.
+- Tests and CI.
+- In the linker script: handle `.ARM.exidx`/`.ARM.attributes`, add a stack overflow guard,
+  and maybe use RAMX (96 KiB at `0x0400_0000`).
+- Remove the two test statics (`DATA_CONTOR_TEST`, `BSS_ZERO_TEST`) once there are real ones.
 
 ## Building
 
-Requires the target and the LLVM tools that ship `rust-objdump`:
+You need the target and the LLVM tools (for `rust-objdump`):
 
 ```sh
 rustup target add thumbv8m.main-none-eabihf
 rustup component add llvm-tools
-cargo install cargo-binutils   # optional: gives `cargo objdump`, `cargo size`, etc.
+cargo install cargo-binutils   # optional, gives cargo objdump / cargo size
 ```
 
-Build (the target triple and linker flags come from `.cargo/config.toml`, so a plain
-`cargo build` is enough):
+The target and linker flags are set in `.cargo/config.toml`, so a plain build works:
 
 ```sh
-cargo build              # debug   -> target/thumbv8m.main-none-eabihf/debug/RustNFC
-cargo build --release    # release -> target/thumbv8m.main-none-eabihf/release/RustNFC
+cargo build --release
 ```
 
-The output is an ELF. There is no flashing step wired up yet.
+Note that `cargo` doesn't notice changes to `memory.x` or `link.x`. After editing them, run
+`cargo clean` and check the new stack top with `rust-objdump -t ... | grep _estack`.
 
-### Inspecting the image
-
-The startup layer is verified by reading the linked ELF, not by running it:
+To look at the output:
 
 ```sh
-rust-objdump -h                       target/thumbv8m.main-none-eabihf/debug/RustNFC   # sections
-rust-objdump -s -j .vector_table      target/thumbv8m.main-none-eabihf/debug/RustNFC   # SP + reset vector
-rust-objdump -d                       target/thumbv8m.main-none-eabihf/debug/RustNFC   # disassembly
+rust-objdump -h                  target/thumbv8m.main-none-eabihf/release/RustNFC   # sections
+rust-objdump -s -j .vector_table target/thumbv8m.main-none-eabihf/release/RustNFC   # vector table
+rust-objdump -d                  target/thumbv8m.main-none-eabihf/release/RustNFC   # disassembly
 ```
 
-Expected: `.vector_table` at VMA `0x0`, first word `0x2004_0000` (top of RAM), second word
-the odd (Thumb) address of `Reset`.
+The vector table should be at `0x0` and `0x40` bytes long. The first word is the stack top
+(`0x2003_8000`), the second is the address of `Reset` with the Thumb bit set (an odd number).
 
----
+## Flashing
 
-## Repository layout
+I use [probe-rs](https://probe.rs) with the MCU-Link debugger that's on the board.
 
-| Path                  | What it is                                                        |
-|-----------------------|------------------------------------------------------------------|
-| `.cargo/config.toml`  | Default target triple + `-T link.x` / `-L .` linker flags        |
-| `Cargo.toml`          | Crate metadata. `[dependencies]` is intentionally empty for now  |
-| `memory.x`            | `MEMORY { FLASH, RAM }` for the MCX N236                          |
-| `link.x`              | Linker script: `ENTRY`, section placement, runtime symbols       |
-| `src/main.rs`         | Panic handler, `VectorTable`, `Reset`                            |
+A few things that cost me time:
 
----
+- Jumper JP7 (SWD_DIS) has to be open. If it's closed, MCU-Link doesn't expose its CMSIS-DAP
+  interface and probe-rs fails with "Could not determine a suitable packet size".
+- On WSL the USB device has to be forwarded from Windows with `usbipd-win`
+  (`usbipd attach --wsl --busid <BUSID>` after every replug), and the probe-rs udev rules
+  need to be installed.
+- `probe-rs info` can't detect this chip, so use the commands that take `--chip`.
 
-## Architecture notes
+```sh
+probe-rs download --chip MCXN236VDF target/thumbv8m.main-none-eabihf/release/RustNFC
+probe-rs reset    --chip MCXN236VDF
 
-### Why no `cortex-m-rt`
+# read the .data/.bss test statics (should be 5 and 0)
+probe-rs read  --chip MCXN236VDF b32 0x20000000 2
 
-`cortex-m-rt` provides exactly the pieces this project is meant to build by hand: the
-vector table, the reset handler, `.data`/`.bss` init, FPU/`VTOR` setup, the `#[entry]` and
-`#[exception]` macros, and a set of linker sections/symbols its `link.x` expects. Using it
-would mean the most instructive part of embedded bring-up - what the CPU does between
-reset and the first line of `main`, and what has to be true about memory before Rust is
-sound - happens inside a dependency.
+# toggle the red LED by hand
+probe-rs write --chip MCXN236VDF b32 0x4009E04C 0x00040000
+```
 
-The hand-written version here owns:
+## Files
 
-- the `.vector_table` contents and their placement at `0x0000_0000`
-- the initial stack pointer (`_estack` = `ORIGIN(RAM) + LENGTH(RAM)`)
-- the `Reset` entry point and (soon) the memory-init sequence it must run
-- every linker symbol the runtime relies on
+| Path                 | Contents                                                     |
+|----------------------|--------------------------------------------------------------|
+| `.cargo/config.toml` | default target and linker flags                              |
+| `Cargo.toml`         | crate metadata, no dependencies yet                          |
+| `memory.x`           | flash and RAM regions                                        |
+| `link.x`             | linker script                                                |
+| `src/main.rs`        | panic handler and `main` (the LED blink)                     |
+| `src/startup.rs`     | linker symbols, vector table, `Reset`, `DefaultHandler`      |
+| `src/reg.rs`         | `read_reg`, `write_reg`, `set_bits`                          |
+| `src/scb.rs`         | ARM System Control Block registers (`CPACR`, `VTOR`)         |
+| `src/systick.rs`     | ARM SysTick: `init` and `delay_ms`                            |
+| `src/syscon.rs`      | NXP SYSCON registers (clock gating)                          |
+| `src/gpio.rs`        | NXP GPIO4 registers (`PDOR`, `PTOR`, `PDDR`)                 |
 
-### Why no HAL
+## Notes on the design
 
-A HAL trades register-level knowledge for a portable API. For a dissertation whose subject
-*is* that register-level knowledge, that trade is backwards. Driving LPI2C, the clock tree,
-GPIO and SysTick straight from their registers keeps the reference manual in the loop and
-makes the write-up concrete.
+### Why not `cortex-m-rt`
 
-### Why the PAC is acceptable (once added)
+`cortex-m-rt` already provides the vector table, the reset handler, `.data`/`.bss` init, the
+`#[entry]` and `#[exception]` macros and its own linker script. That's exactly the part I
+want to write myself. What happens between reset and the first line of `main`, and what has
+to be true about memory before Rust code is safe to run, is one of the most interesting parts
+of embedded work, and with the crate it would all stay hidden.
 
-`mcx-pac` is generated from NXP's SVD. It is a typed name for each register and field and
-nothing more - no sequencing, no policy, no hidden state. It can be checked against the
-datasheet mechanically, and it removes a class of transcription bugs (wrong offset, wrong
-bit) without removing any of the understanding. It is the single dependency the project
-will allow.
+### Why not a HAL
 
-### Trade-offs (acknowledged)
+A HAL gives you a portable API in exchange for hiding the registers. Since the registers are
+the subject of my dissertation, that trade doesn't make sense here.
 
-More boilerplate; easy to get subtly wrong (section alignment, `Sync` impls, `#[used]`,
-`volatile` access, missing memory barriers); single-target and non-portable. All
-acceptable for a one-board academic artefact, none acceptable for a real driver crate.
+### Why the PAC is fine
 
----
+`mcx-pac` is generated from NXP's SVD. It gives each register and field a typed name and
+nothing else: no init sequences, no hidden state. It removes a whole class of typos (wrong
+offset, wrong bit) without hiding how anything works.
+
+### Downsides
+
+There's more boilerplate, and it's easy to get small things wrong: section alignment, `Sync`
+impls, `#[used]`, volatile accesses, memory barriers. The code also only works on this one
+board. That's fine for a dissertation, but I wouldn't do it this way in a real driver crate.
 
 ## Roadmap
 
-Roughly in dependency order:
-
-1. **Finish startup.** In `Reset`: copy `.data` (`_sidata` → `_sdata..=_edata`), zero
-   `.bss` (`_sbss..=_ebss`), enable the FPU via `CPACR`, set `VTOR`, then call `main`.
-2. **Full vector table.** Core exceptions + fault handlers (at minimum a `DefaultHandler`
-   that traps), SysTick slot, room for device IRQs.
-3. **Add `mcx-pac`** and replace raw pointer access.
-4. **Clocks.** Understand the FRO/PLL/SCG setup on MCX N; bring the core to a known
-   frequency and derive a usable I2C functional clock.
-5. **GPIO + blinky.** First proof of life on the onboard LED.
-6. **SysTick timebase.** Blocking `delay_ms`, a monotonic tick.
-7. **I2C master from registers.** LPI2C pinmux, baud-rate divider, START/STOP, TX/RX FIFO
-   handling, NACK/arbitration-loss handling.
-8. **PN532 transport.** I2C wakeup + status-byte polling; build and parse the normal
-   information frame (preamble, `00 FF` start code, `LEN`/`LCS`, `TFI` `0xD4`/`0xD5`,
-   payload, `DCS`, postamble); ACK/NACK frames; error frames.
-9. **PN532 commands.** `GetFirmwareVersion`, `SAMConfiguration`, `InListPassiveTarget`
-   (ISO/IEC 14443 Type A) → read a card UID end to end.
-10. **Stretch.** IRQ-line-driven instead of polled; MIFARE Classic auth; NDEF record
-    parsing.
-
----
+1. ~~Finish the startup code~~ (`.data`, `.bss`, FPU, `VTOR`, `main`)
+2. ~~Full vector table~~ for the core exceptions. Device IRQs come later.
+3. Add `mcx-pac`.
+4. Clocks: understand FRO/PLL/SCG on the MCX N, set a known core frequency and a clock for I2C.
+5. ~~GPIO and blinky~~ (red LED on P4_18)
+6. ~~SysTick delay~~. An interrupt-driven tick comes later.
+7. I2C master from registers: pin muxing, baud rate, START/STOP, TX/RX FIFOs, NACK and
+   arbitration loss.
+8. PN532 transport: wakeup over I2C, polling the status byte, building and parsing frames
+   (preamble, `00 FF` start code, `LEN`/`LCS`, `TFI` `0xD4`/`0xD5`, payload, `DCS`,
+   postamble), ACK/NACK and error frames.
+9. PN532 commands: `GetFirmwareVersion`, `SAMConfiguration`, `InListPassiveTarget`
+   (ISO/IEC 14443 Type A), and reading a card UID from start to finish.
+10. If there's time: use the PN532 IRQ line instead of polling, MIFARE Classic
+    authentication, NDEF parsing.
