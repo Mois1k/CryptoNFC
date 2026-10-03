@@ -1,0 +1,1 @@
+pub const SYSCON_AHBCLKCTRL0: usize = 0x4000_0200;

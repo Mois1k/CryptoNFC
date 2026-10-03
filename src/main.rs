@@ -1,15 +1,20 @@
 #![no_std]
 #![no_main]
 
+mod gpio;
+mod reg;
+mod scb;
+mod syscon;
+
 use core::{
     arch::asm,
     panic::PanicInfo,
-    ptr::{read_volatile, write_volatile},
 };
 
-const CPACR_ADDR: usize = 0xE000_ED88;
-const VTOR_ADDR: usize = 0xE000_ED08;
-const SYSCON_AHBCLKCTRL0: usize = 0x4000_0200;
+use gpio::{GPIO4_PDDR, GPIO4_PDOR, GPIO4_PTOR};
+use reg::{set_bits, write_reg};
+use scb::{CPACR_ADDR, VTOR_ADDR};
+use syscon::SYSCON_AHBCLKCTRL0;
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo<'_>) -> ! {
@@ -71,20 +76,14 @@ static mut BSS_ZERO_TEST: u32 = 0;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn Reset() -> ! {
-    let cpacr = CPACR_ADDR as *mut u32;
-    let vtor = VTOR_ADDR as *mut u32;
-    let mask: u32 = 0x00f0_0000;
-    let value = unsafe { read_volatile(cpacr) };
-    let result = value | mask;
-
     unsafe {
-        write_volatile(cpacr, result);
+        set_bits(CPACR_ADDR, 0x00f0_0000);
         asm!("dsb");
         asm!("isb");
     }
 
     unsafe {
-        write_volatile(vtor, &VECTOR as *const VectorTable as u32);
+        write_reg(VTOR_ADDR, &VECTOR as *const VectorTable as u32);
         asm!("dsb");
         asm!("isb");
     }
@@ -115,27 +114,13 @@ pub extern "C" fn Reset() -> ! {
 }
 
 fn main() -> ! {
-    let ahbclkctrl0 = SYSCON_AHBCLKCTRL0 as *mut u32;
-    let ahbclkctrl0_value = unsafe { read_volatile(ahbclkctrl0) };
-    let ahbclkctrl0_result = ahbclkctrl0_value | (1 << 17) | (1 << 23);
-    unsafe { write_volatile(ahbclkctrl0, ahbclkctrl0_result) };
+    set_bits(SYSCON_AHBCLKCTRL0, (1 << 17) | (1 << 23));
 
-    const GPIO4_PDDR: usize = 0x4009_E054;
-    const GPIO4_PDOR: usize = 0x4009_E040;
-    const GPIO4_PTOR: usize = 0x4009_E04C;
-
-    let pddr = GPIO4_PDDR as *mut u32;
-    let pddr_value = unsafe { read_volatile(pddr) };
-    let pddr_res = pddr_value | (1 << 18);
-    let pdor = GPIO4_PDOR as *mut u32;
-    let pdor_value = unsafe { read_volatile(pdor) };
-    let pdor_res = pdor_value | (1 << 18);
-    let ptor = GPIO4_PTOR as *mut u32;
-    unsafe { write_volatile(pdor, pdor_res) };
-    unsafe { write_volatile(pddr, pddr_res) };
+    set_bits(GPIO4_PDOR, 1 << 18);
+    set_bits(GPIO4_PDDR, 1 << 18);
 
     loop {
-        unsafe { write_volatile(ptor, 1 << 18) };
+        write_reg(GPIO4_PTOR, 1 << 18);
         for _ in 0..12000000 {
             unsafe { asm!("nop") };
         }
