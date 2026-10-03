@@ -10,10 +10,7 @@ mod startup;
 use core::panic::PanicInfo;
 
 use crate::arm::systick::delay_ms;
-use crate::drivers::led::YELLOW;
-use crate::nxp::gpio::{GPIO4_PDDR, GPIO4_PDOR, GPIO4_PTOR};
-use crate::nxp::syscon::SYSCON_AHBCLKCTRL0;
-use crate::reg::{set_bits, write_reg};
+use crate::drivers::led::{self, BLUE, GREEN, YELLOW};
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo<'_>) -> ! {
@@ -21,14 +18,13 @@ fn panic_handler(_info: &PanicInfo<'_>) -> ! {
 }
 
 fn main() -> ! {
-    set_bits(SYSCON_AHBCLKCTRL0, (1 << 17) | (1 << 23));
-
-    set_bits(GPIO4_PDOR, YELLOW);
-    set_bits(GPIO4_PDDR, YELLOW);
-
     arm::systick::init();
+    led::init();
+    led::on(BLUE);
     loop {
-        write_reg(GPIO4_PTOR, YELLOW);
+        led::set(GREEN);
+        delay_ms(1000);
+        led::set(BLUE);
         delay_ms(1000);
     }
 }
