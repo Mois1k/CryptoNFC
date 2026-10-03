@@ -13,3 +13,8 @@ pub fn write_reg(addr: usize, value: u32) {
     let ptr = addr as *mut u32;
     unsafe { write_volatile(ptr, value) };
 }
+
+pub fn read_reg(addr: usize) -> u32 {
+    let ptr = addr as *mut u32;
+    unsafe { read_volatile(ptr) }
+}
