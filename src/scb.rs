@@ -1,2 +1,2 @@
-pub const CPACR_ADDR: usize = 0xE000_ED88;
-pub const VTOR_ADDR: usize = 0xE000_ED08;
+pub const CPACR_ADDR: usize = 0xE000_ED88; // FPU ACCESS
+pub const VTOR_ADDR: usize = 0xE000_ED08; // HOLDS VECTOR TABLE ADDRESS
