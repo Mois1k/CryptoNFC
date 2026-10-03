@@ -1,5 +1,5 @@
 use crate::reg::{set_bits, write_reg};
-use crate::scb::{CPACR_ADDR, VTOR_ADDR};
+use crate::arm::scb::{CPACR_ADDR, VTOR_ADDR};
 use core::arch::asm;
 
 unsafe extern "C" {

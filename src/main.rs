@@ -1,19 +1,19 @@
 #![no_std]
 #![no_main]
 
-mod gpio;
+mod arm;
+mod drivers;
+mod nxp;
 mod reg;
-mod scb;
 mod startup;
-mod syscon;
-mod systick;
 
 use core::panic::PanicInfo;
 
-use crate::gpio::{GPIO4_PDDR, GPIO4_PDOR, GPIO4_PTOR};
+use crate::arm::systick::delay_ms;
+use crate::drivers::led::YELLOW;
+use crate::nxp::gpio::{GPIO4_PDDR, GPIO4_PDOR, GPIO4_PTOR};
+use crate::nxp::syscon::SYSCON_AHBCLKCTRL0;
 use crate::reg::{set_bits, write_reg};
-use crate::syscon::SYSCON_AHBCLKCTRL0;
-use crate::systick::delay_ms;
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo<'_>) -> ! {
@@ -23,12 +23,12 @@ fn panic_handler(_info: &PanicInfo<'_>) -> ! {
 fn main() -> ! {
     set_bits(SYSCON_AHBCLKCTRL0, (1 << 17) | (1 << 23));
 
-    set_bits(GPIO4_PDOR, 1 << 18);
-    set_bits(GPIO4_PDDR, 1 << 18);
+    set_bits(GPIO4_PDOR, YELLOW);
+    set_bits(GPIO4_PDDR, YELLOW);
 
-    systick::init();
+    arm::systick::init();
     loop {
-        write_reg(GPIO4_PTOR, 1 << 18);
+        write_reg(GPIO4_PTOR, YELLOW);
         delay_ms(1000);
     }
 }
